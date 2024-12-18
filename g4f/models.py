@@ -16,15 +16,14 @@ from .Provider import (
     DDG,
     DeepInfraChat,
     Flux,
-    Free2GPT,
     GigaChat,
     Gemini,
     GeminiPro,
     HuggingChat,
     HuggingFace,
     Liaobots,
-    Airforce,
     Mhystical,
+    Airforce,
     MetaAI,
     MicrosoftDesigner,
     OpenaiChat,
@@ -68,17 +67,17 @@ default = Model(
     best_provider = IterListProvider([
         DDG,
         Pizzagpt,
-        ReplicateHome,
         Blackbox2,
         Blackbox,
         Copilot,
-        Free2GPT,
         DeepInfraChat,
         Airforce, 
         Cloudflare,
         PollinationsAI,
         ChatGptEs,
-        ChatGpt,
+        OpenaiChat,
+        Mhystical,
+        RubiksAI,
     ])
 )
 
@@ -98,7 +97,7 @@ gpt_35_turbo = Model(
 gpt_4 = Model(
     name          = 'gpt-4',
     base_provider = 'OpenAI',
-    best_provider = IterListProvider([DDG, Blackbox, ChatGptEs, PollinationsAI, Copilot, OpenaiChat, Liaobots, Airforce])
+    best_provider = IterListProvider([DDG, Blackbox, ChatGptEs, PollinationsAI, Copilot, OpenaiChat, Liaobots, Airforce, Mhystical])
 )
 
 gpt_4_turbo = Model(

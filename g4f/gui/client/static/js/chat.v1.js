@@ -20,6 +20,8 @@ const settings          = document.querySelector(".settings");
 const chat              = document.querySelector(".conversation");
 const album             = document.querySelector(".images");
 const log_storage       = document.querySelector(".log");
+const switchInput       = document.getElementById("switch");
+const searchButton      = document.getElementById("search");
 
 const optionElementsSelector = ".settings input, .settings textarea, #model, #model2, #provider";
 
@@ -513,21 +515,7 @@ async function add_message_chunk(message, message_id) {
         content_map.inner.innerHTML = markdown_render(message.preview);
     } else if (message.type == "content") {
         message_storage[message_id] += message.content;
-        html = markdown_render(message_storage[message_id]);
-        let lastElement, lastIndex = null;
-        for (element of ['</p>', '</code></pre>', '</p>\n</li>\n</ol>', '</li>\n</ol>', '</li>\n</ul>']) {
-            const index = html.lastIndexOf(element)
-            if (index - element.length > lastIndex) {
-                lastElement = element;
-                lastIndex = index;
-            }
-        }
-        if (lastIndex) {
-            html = html.substring(0, lastIndex) + '<span class="cursor"></span>' + lastElement;
-        }
-        content_map.inner.innerHTML = html;
-        content_map.count.innerText = count_words_and_tokens(message_storage[message_id], provider_storage[message_id]?.model);
-        highlight(content_map.inner);
+        update_message(content_map, message_id);
         content_map.inner.style.height = "";
     } else if (message.type == "log") {
         let p = document.createElement("p");
@@ -535,16 +523,6 @@ async function add_message_chunk(message, message_id) {
         log_storage.appendChild(p);
     } else if (message.type == "synthesize") {
         synthesize_storage[message_id] = message.synthesize;
-    }
-    let scroll_down = ()=>{
-        if (message_box.scrollTop >= message_box.scrollHeight - message_box.clientHeight - 100) {
-            window.scrollTo(0, 0);
-            message_box.scrollTo({ top: message_box.scrollHeight, behavior: "auto" });
-        }
-    }
-    if (!content_map.container.classList.contains("regenerate")) {
-        scroll_down();
-        setTimeout(scroll_down, 200);
     }
 }
 
@@ -615,7 +593,7 @@ const ask_gpt = async (message_id, message_index = -1, regenerate = false, provi
             id: message_id,
             conversation_id: window.conversation_id,
             model: model,
-            web_search: document.getElementById("switch").checked,
+            web_search: switchInput.checked,
             provider: provider,
             messages: messages,
             auto_continue: auto_continue,
@@ -623,6 +601,7 @@ const ask_gpt = async (message_id, message_index = -1, regenerate = false, provi
             api_key: api_key,
             ignored: ignored,
         }, files, message_id);
+        if (content_map.inner.dataset.timeout) clearTimeout(content_map.inner.dataset.timeout);
         if (!error_storage[message_id]) {
             html = markdown_render(message_storage[message_id]);
             content_map.inner.innerHTML = html;
@@ -651,10 +630,9 @@ const ask_gpt = async (message_id, message_index = -1, regenerate = false, provi
             regenerate
         );
         await safe_load_conversation(window.conversation_id, message_index == -1);
-    } else {
-        let cursorDiv = message_el.querySelector(".cursor");
-        if (cursorDiv) cursorDiv.parentNode.removeChild(cursorDiv);
     }
+    let cursorDiv = message_el.querySelector(".cursor");
+    if (cursorDiv) cursorDiv.parentNode.removeChild(cursorDiv);
     if (message_index == -1) {
         await scroll_to_bottom();
     }
@@ -1233,6 +1211,36 @@ function count_words_and_tokens(text, model) {
     return `(${count_words(text)} words, ${count_chars(text)} chars, ${count_tokens(model, text)} tokens)`;
 }
 
+function update_message(content_map, message_id) {
+    content_map.inner.dataset.timeout = setTimeout(() => {
+        html = markdown_render(message_storage[message_id]);
+        let lastElement, lastIndex = null;
+        for (element of ['</p>', '</code></pre>', '</p>\n</li>\n</ol>', '</li>\n</ol>', '</li>\n</ul>']) {
+            const index = html.lastIndexOf(element)
+            if (index - element.length > lastIndex) {
+                lastElement = element;
+                lastIndex = index;
+            }
+        }
+        if (lastIndex) {
+            html = html.substring(0, lastIndex) + '<span class="cursor"></span>' + lastElement;
+        }
+        if (error_storage[message_id]) {
+            content_map.inner.innerHTML += markdown_render(`**An error occured:** ${error_storage[message_id]}`);
+        }
+        content_map.inner.innerHTML = html;
+        content_map.count.innerText = count_words_and_tokens(message_storage[message_id], provider_storage[message_id]?.model);
+        highlight(content_map.inner);
+        if (!content_map.container.classList.contains("regenerate")) {
+            if (message_box.scrollTop >= message_box.scrollHeight - message_box.clientHeight - 200) {
+                window.scrollTo(0, 0);
+                message_box.scrollTo({ top: message_box.scrollHeight, behavior: "auto" });
+            }
+        }
+        if (content_map.inner.dataset.timeout) clearTimeout(content_map.inner.dataset.timeout);
+    }, 100);
+};
+
 let countFocus = messageInput;
 let timeoutId;
 const count_input = async () => {
@@ -1428,6 +1436,9 @@ async function on_api() {
             }
         });
     }
+
+    const method = switchInput.checked ? "add" : "remove";
+    searchButton.classList[method]("active");
 }
 
 async function load_version() {
@@ -1634,6 +1645,7 @@ async function load_provider_models(providerIndex=null) {
     }
 };
 providerSelect.addEventListener("change", () => load_provider_models());
+
 document.getElementById("pin").addEventListener("click", async () => {
     const pin_container = document.getElementById("pin_container");
     let selected_provider = providerSelect.options[providerSelect.selectedIndex];
@@ -1659,6 +1671,14 @@ document.getElementById("pin").addEventListener("click", async () => {
         }
         pin_container.appendChild(pinned);
     }
+});
+
+switchInput.addEventListener("change", () => {
+    const method = switchInput.checked ? "add" : "remove";
+    searchButton.classList[method]("active");
+});
+searchButton.addEventListener("click", async () => {
+    switchInput.click();
 });
 
 function save_storage() {

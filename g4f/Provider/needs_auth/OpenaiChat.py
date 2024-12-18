@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import asyncio
 import uuid
@@ -8,6 +9,7 @@ import base64
 import time
 import requests
 import random
+from typing import AsyncIterator
 from copy import copy
 
 try:
@@ -314,7 +316,8 @@ class OpenaiChat(AsyncGeneratorProvider, ProviderModelMixin):
             RuntimeError: If an error occurs during processing.
         """
         if cls.needs_auth:
-            await cls.login(proxy)
+            async for message in cls.login(proxy):
+                yield message
         async with StreamSession(
             proxy=proxy,
             impersonate="chrome",
@@ -352,7 +355,10 @@ class OpenaiChat(AsyncGeneratorProvider, ProviderModelMixin):
                     json={"p": get_requirements_token(RequestConfig.proof_token) if RequestConfig.proof_token else None},
                     headers=cls._headers
                 ) as response:
-                    cls._update_request_args(session)
+                    if response.status == 401:
+                        cls._headers = cls._api_key = None
+                    else:
+                        cls._update_request_args(session)
                     await raise_for_status(response)
                     chat_requirements = await response.json()
                     need_turnstile = chat_requirements.get("turnstile", {}).get("required", False)
@@ -438,7 +444,7 @@ class OpenaiChat(AsyncGeneratorProvider, ProviderModelMixin):
                     async for line in response.iter_lines():
                         async for chunk in cls.iter_messages_line(session, line, conversation):
                             yield chunk
-                if not history_disabled and RequestConfig.access_token is not None:
+                if not history_disabled and cls._api_key is not None:
                     yield SynthesizeData(cls.__name__, {
                         "conversation_id": conversation.conversation_id,
                         "message_id": conversation.message_id,
@@ -501,7 +507,8 @@ class OpenaiChat(AsyncGeneratorProvider, ProviderModelMixin):
 
     @classmethod
     async def synthesize(cls, params: dict) -> AsyncIterator[bytes]:
-        await cls.login()
+        async for _ in cls.login():
+            pass
         async with StreamSession(
             impersonate="chrome",
             timeout=0
@@ -516,23 +523,27 @@ class OpenaiChat(AsyncGeneratorProvider, ProviderModelMixin):
                     yield chunk
 
     @classmethod
-    async def login(cls, proxy: str = None):
+    async def login(cls, proxy: str = None) -> AsyncIterator[str]:
         if cls._expires is not None and cls._expires < time.time():
             cls._headers = cls._api_key = None
         try:
             await get_request_config(proxy)
             cls._create_request_args(RequestConfig.cookies, RequestConfig.headers)
-            cls._set_api_key(RequestConfig.access_token)
+            if RequestConfig.access_token is not None:
+                cls._set_api_key(RequestConfig.access_token)
         except NoValidHarFileError:
             if has_nodriver:
-                if RequestConfig.access_token is None:
+                if cls._api_key is None:
+                    login_url = os.environ.get("G4F_LOGIN_URL")
+                    if login_url:
+                        yield f"[Login to {cls.label}]({login_url})\n\n"
                     await cls.nodriver_auth(proxy)
             else:
                 raise
 
     @classmethod
     async def nodriver_auth(cls, proxy: str = None):
-        browser = await get_nodriver(proxy=proxy, user_data_dir="chatgpt")
+        browser = await get_nodriver(proxy=proxy)
         page = browser.main_tab
         def on_request(event: nodriver.cdp.network.RequestWillBeSent):
             if event.request.url == start_url or event.request.url.startswith(conversation_url):
@@ -545,7 +556,7 @@ class OpenaiChat(AsyncGeneratorProvider, ProviderModelMixin):
                 if "OpenAI-Sentinel-Turnstile-Token" in event.request.headers:
                     RequestConfig.turnstile_token = event.request.headers["OpenAI-Sentinel-Turnstile-Token"]
                 if "Authorization" in event.request.headers:
-                    RequestConfig.access_token = event.request.headers["Authorization"].split()[-1]
+                    cls._api_key = event.request.headers["Authorization"].split()[-1]
             elif event.request.url == arkose_url:
                 RequestConfig.arkose_request = arkReq(
                     arkURL=event.request.url,
@@ -560,13 +571,13 @@ class OpenaiChat(AsyncGeneratorProvider, ProviderModelMixin):
         user_agent = await page.evaluate("window.navigator.userAgent")
         await page.select("#prompt-textarea", 240)
         while True:
-            if RequestConfig.access_token:
+            if cls._api_key is not None:
                 break
             body = await page.evaluate("JSON.stringify(window.__remixContext)")
             if body:
                 match = re.search(r'"accessToken":"(.*?)"', body)
                 if match:
-                    RequestConfig.access_token = match.group(1)
+                    cls._api_key = match.group(1)
                     break
             await asyncio.sleep(1)
         while True:
@@ -574,11 +585,11 @@ class OpenaiChat(AsyncGeneratorProvider, ProviderModelMixin):
                 break
             await asyncio.sleep(1)
         RequestConfig.data_build = await page.evaluate("document.documentElement.getAttribute('data-build')")
-        for c in await page.send(nodriver.cdp.network.get_cookies([cls.url])):
-            RequestConfig.cookies[c.name] = c.value
+        for c in await page.send(get_cookies([cls.url])):
+            RequestConfig.cookies[c["name"]] = c["value"]
         await page.close()
         cls._create_request_args(RequestConfig.cookies, RequestConfig.headers, user_agent=user_agent)
-        cls._set_api_key(RequestConfig.access_token)
+        cls._set_api_key(cls._api_key)
 
     @staticmethod
     def get_default_headers() -> dict:
@@ -622,3 +633,16 @@ class Conversation(BaseConversation):
         self.message_id = message_id
         self.finish_reason = finish_reason
         self.is_recipient = False
+        
+def get_cookies(
+        urls: list[str]  = None
+    ):
+    params = {}
+    if urls is not None:
+        params['urls'] = [i for i in urls]
+    cmd_dict = {
+        'method': 'Network.getCookies',
+        'params': params,
+    }
+    json = yield cmd_dict
+    return json['cookies']

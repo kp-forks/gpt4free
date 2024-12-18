@@ -8,7 +8,7 @@ try:
     from .curl_cffi import StreamResponse, StreamSession, FormData
     has_curl_cffi = True
 except ImportError:
-    from typing import Type as Session, Type as Response
+    from typing import Type as Response
     from .aiohttp import StreamResponse, StreamSession, FormData
     has_curl_cffi = False
 try:
@@ -37,6 +37,11 @@ from ..webdriver import bypass_cloudflare, get_driver_cookies
 from ..errors import MissingRequirementsError
 from ..typing import Cookies
 from .defaults import DEFAULT_HEADERS, WEBVIEW_HAEDERS
+
+if not has_curl_cffi:
+    class Session:
+        def __init__(self, **kwargs):
+            raise MissingRequirementsError('Install "curl_cffi" package | pip install -U curl_cffi')
 
 async def get_args_from_webview(url: str) -> dict:
     if not has_webview:
@@ -151,14 +156,14 @@ async def get_args_from_nodriver(
     else:
         await browser.cookies.set_all(get_cookie_params_from_dict(cookies, url=url, domain=domain))
     page = await browser.get(url)
-    for c in await browser.cookies.get_all():
-        if c.domain.endswith(domain):
-            cookies[c.name] = c.value
+    for c in await page.send(nodriver.cdp.network.get_cookies([url])):
+        cookies[c.name] = c.value
     user_agent = await page.evaluate("window.navigator.userAgent")
     await page.wait_for("body:not(.no-js)", timeout=timeout)
     await page.close()
     browser.stop()
     return {
+        "impersonate": "chrome",
         "cookies": cookies,
         "headers": {
             **DEFAULT_HEADERS,

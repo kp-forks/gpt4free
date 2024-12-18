@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import json
 import asyncio
 import base64
@@ -18,7 +19,7 @@ except ImportError:
     has_nodriver = False
 
 from .base_provider import AbstractProvider, ProviderModelMixin, BaseConversation
-from .helper import format_prompt
+from .helper import format_prompt_max_length
 from ..typing import CreateResult, Messages, ImagesType
 from ..errors import MissingRequirementsError, NoValidHarFileError
 from ..requests.raise_for_status import raise_for_status
@@ -76,10 +77,13 @@ class Copilot(AbstractProvider, ProviderModelMixin):
                     cls._access_token, cls._cookies = readHAR(cls.url)
                 except NoValidHarFileError as h:
                     debug.log(f"Copilot: {h}")
-                    try:
+                    if has_nodriver:
+                        login_url = os.environ.get("G4F_LOGIN_URL")
+                        if login_url:
+                            yield f"[Login to {cls.label}]({login_url})\n\n"
                         get_running_loop(check_nested=True)
                         cls._access_token, cls._cookies = asyncio.run(get_access_token_and_cookies(cls.url, proxy))
-                    except MissingRequirementsError:
+                    else:
                         raise h
             debug.log(f"Copilot: Access token: {cls._access_token[:7]}...{cls._access_token[-5:]}")
             websocket_url = f"{websocket_url}&accessToken={quote(cls._access_token)}"
@@ -120,16 +124,7 @@ class Copilot(AbstractProvider, ProviderModelMixin):
                 conversation_id = response.json().get("id")
                 if return_conversation:
                     yield Conversation(conversation_id)
-                prompt = format_prompt(messages)
-                if len(prompt) > 10000:
-                    if len(messages) > 6:
-                        prompt = format_prompt(messages[:3] + messages[-3:])
-                    if len(prompt) > 10000:
-                        if len(messages) > 2:
-                            prompt = format_prompt(messages[:2] + messages[-1:])
-                        if len(prompt) > 10000:
-                            prompt = messages[-1]["content"]
-                    debug.log(f"Copilot: Trim messages to: {len(prompt)}")
+                prompt = format_prompt_max_length(messages, 10000)
                 debug.log(f"Copilot: Created conversation: {conversation_id}")
             else:
                 conversation_id = conversation.conversation_id
